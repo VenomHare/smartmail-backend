@@ -25,8 +25,6 @@ type LLMResponse = {
     subject: string
 }
 
-
-
 const main = async () => {
     while (true) {
         const jobId = await redis.brpop("work_queue", 0);
