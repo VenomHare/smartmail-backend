@@ -4,11 +4,16 @@ import { PORT } from './lib/env';
 import { authMiddleware } from './middleware/auth';
 import mailRouter from './routes/mail';
 import authRouter from './routes/auth';
+import CookieParser from 'cookie-parser'
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+    origin: "http://localhost:3000",
+    credentials: true
+}));
 app.use(express.json());
+app.use(CookieParser());
 
 app.use((req, _, next) => {
     console.log(`${req.method} ${req.url} ${JSON.stringify(req.body)}`);

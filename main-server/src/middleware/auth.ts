@@ -1,25 +1,61 @@
 import type { NextFunction, Request, Response } from "express";
-import { getSupabaseWithCookies } from "../lib/supabase";
+import { supabase, supabaseAdmin } from "../lib/supabase";
+import { redisAuth } from "../lib/redis";
+import { FRONTEND_URL } from "../lib/env";
 
-interface AuthRequest extends Request {
-    user?: any
+//Refrence Types from supabase
+export type UserClaims = {
+    iss: string
+    sub: string
+    aud: string | string[]
+    exp: number
+    iat: number
+    role: string
+    session_id: string,
+
+    email?: string
+    phone?: string
+    is_anonymous?: boolean
+
+    jti?: string
+    nbf?: number
+    app_metadata?: any
+    user_metadata?: any
+
+    ref?: string
+
+    [key: string]: any
+}
+
+export interface AuthRequest extends Request {
+    user?: UserClaims
 }
 
 export const authMiddleware = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
+        const access_token = req.cookies.access_token;
 
-        const { data, error } = await supabase.auth.getClaims()
-
-        if (error || data == null) {
-            console.log(error);
-            res.status(401).json({ error: 'Unauthorized' });
+        if (!access_token) {
+            res.status(401).json({
+                message: "Unauthorized",
+                errorCode: "TK_01"
+            });
             return
         }
 
-        console.log(data);
-        req.user = data.claims
+        const { data } = await supabase.auth.getClaims(access_token);
+
+        if (!data || !data.claims) {
+            res.status(401).json({
+                message: "Unauthorized",
+                errorCode: "TK_02"
+            });
+            return
+        }
+
+        req.user = data.claims;
         next();
+
     }
     catch (err) {
         console.log(err);
@@ -29,4 +65,14 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
         })
         return
     }
+}
+
+export const signout = async (req: AuthRequest, res: Response) => {
+    if (!req.user) { return res.status(401).json({ message: "Session not found", errorCode: "SE_404" }) }
+    await supabaseAdmin.auth.admin.signOut(req.cookies.access_token);
+    await redisAuth.del(`session:${req.user.sub}`);
+    res.clearCookie("access_token");
+    res.json({
+        message: "Logout Succesfull."
+    });
 }

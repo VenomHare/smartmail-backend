@@ -1,12 +1,13 @@
-import { application, Router } from "express";
-import { getSupabaseWithCookies } from "../lib/supabase";
-import { FRONTEND_URL } from "../lib/env";
+import { Router } from "express";
+import { supabase } from "../lib/supabase";
+import { FRONTEND_URL, NODE_ENV } from "../lib/env";
+import { redisAuth } from "../lib/redis";
+import { authMiddleware, signout, type AuthRequest } from "../middleware/auth";
 
 const authRouter = Router();
 
 authRouter.post("/signup", async (req, res) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
 
         const { email, password } = req.body;
 
@@ -20,6 +21,20 @@ authRouter.post("/signup", async (req, res) => {
                 error: error.message
             })
         }
+
+        if (data.session) {
+            res.cookie("access_token", data.session.access_token, {
+                sameSite: "lax",
+                httpOnly: NODE_ENV == "production",
+                secure: NODE_ENV == "production",
+                maxAge: (data.session.expires_in || 600) * 1000,
+            })
+            // Storing refresh token in seperate redis cache 
+            // Storing ref_token in client cookies just doesn't make sense
+
+            redisAuth.setex(`session:${data.user?.id}`, 2592000, data.session?.refresh_token);
+        }
+
 
         res.json({
             message: 'Signup successful. Check your email for verification.',
@@ -36,10 +51,7 @@ authRouter.post("/signup", async (req, res) => {
 
 authRouter.post("/signin", async (req, res) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
-
         const { email, password } = req.body;
-
         const { data, error } = await supabase.auth.signInWithPassword({
             email,
             password
@@ -51,9 +63,21 @@ authRouter.post("/signin", async (req, res) => {
             })
         }
 
+        if (data.session) {
+            res.cookie("access_token", data.session.access_token, {
+                sameSite: "lax",
+                httpOnly: NODE_ENV == "production",
+                secure: NODE_ENV == "production",
+                maxAge: (data.session.expires_in || 600) * 1000,
+            })
+            // Storing refresh token in seperate redis cache 
+            // Storing ref_token in client cookies just doesn't make sense
+
+            redisAuth.setex(`session:${data.user.id}`, 2592000, data.session?.refresh_token);
+        }
+
         res.json({
-            message: 'Login successful. ',
-            user: data.user
+            message: "login successful"
         });
     }
     catch (err) {
@@ -64,9 +88,8 @@ authRouter.post("/signin", async (req, res) => {
     }
 })
 
-authRouter.get("/google", async (req, res) => {
+authRouter.get("/google", async (_, res) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
 
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
@@ -85,7 +108,6 @@ authRouter.get("/google", async (req, res) => {
 
         // Return the OAuth URL to the frontend
         res.json({ url: data.url });
-
     } catch (error) {
         res.status(500).json({ error: 'OAuth initiation failed' });
     }
@@ -99,8 +121,6 @@ authRouter.post("/callback", async (req, res) => {
             return res.status(400).json({ error: 'No code provided' });
         }
 
-        const supabase = getSupabaseWithCookies(req, res);
-
         // Exchange the code for a session
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
@@ -108,6 +128,20 @@ authRouter.post("/callback", async (req, res) => {
             console.log(error);
             return res.status(400).json({ error: error.message });
         }
+
+        if (data.session) {
+            res.cookie("access_token", data.session.access_token, {
+                sameSite: "lax",
+                httpOnly: NODE_ENV == "production",
+                secure: NODE_ENV == "production",
+                maxAge: (data.session.expires_in || 600) * 1000,
+            })
+            // Storing refresh token in seperate redis cache 
+            // Storing ref_token in client cookies just doesn't make sense
+
+            redisAuth.setex(`session:${data.user.id}`, 2592000, data.session?.refresh_token);
+        }
+
 
         res.json({
             message: 'OAuth login successful',
@@ -118,51 +152,81 @@ authRouter.post("/callback", async (req, res) => {
     }
 })
 
-authRouter.post('/signout', async (req, res) => {
+authRouter.post('/signout', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
-
-        await supabase.auth.signOut();
-
-        res.json({ message: 'Logout successful' });
+        await signout(req, res);
     } catch (error) {
         res.status(500).json({ error: 'Logout failed' });
     }
 });
 
-authRouter.get('/me', async (req, res) => {
+authRouter.get('/me', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
-
-        const { data, error } = await supabase.auth.getClaims();
-
-        if (error || !data?.claims) {
-            return res.status(401).json({ error: 'Not authenticated' });
-        }
-
-        res.json({ user: data.claims });
+        res.json({ user: req.user?.user_metadata });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get user' });
     }
 });
 
-authRouter.post('/refresh', async (req, res) => {
+authRouter.get('/refresh', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        const supabase = getSupabaseWithCookies(req, res);
+        if (!req.user) { return res.status(401).json({ message: "Session not found", errorCode: "SE_404" }) }
 
-        const { data, error } = await supabase.auth.refreshSession();
+        const refreshToken = await redisAuth.getex(`session:${req.user.sub}`);
+        if (refreshToken == null) {
+            console.log("Refresh Token not found. Signing user out for new tokens");
+            await signout(req, res);
+            return
+        }
+
+        const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
 
         if (error) {
             return res.status(401).json({ error: 'Failed to refresh session' });
         }
 
+        if (data.session && data.user) {
+            res.cookie("access_token", data.session.access_token, {
+                sameSite: "lax",
+                httpOnly: NODE_ENV == "production",
+                secure: NODE_ENV == "production",
+                maxAge: (data.session.expires_in || 600) * 1000,
+            })
+
+            // Storing refresh token in client cookies just doesn't make sense
+            redisAuth.setex(`session:${data.user.id}`, 2592000, data.session?.refresh_token);
+        }
+
+
+
         res.json({
             message: 'Session refreshed',
-            session: data.session
         });
     } catch (error) {
         res.status(500).json({ error: 'Refresh failed' });
     }
 });
+
+authRouter.post("/reset", async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+            res.status(400).json({
+                message: "Invalid Input"
+            })
+            return
+        }
+        await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: `${FRONTEND_URL}/signin`
+        });
+
+        res.json({
+            message: "Email Sent!"
+        })
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Refresh failed' });
+    }
+})
 
 export default authRouter
