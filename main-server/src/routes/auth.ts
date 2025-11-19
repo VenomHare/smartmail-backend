@@ -152,7 +152,7 @@ authRouter.post("/callback", async (req, res) => {
     }
 })
 
-authRouter.post('/signout', authMiddleware, async (req: AuthRequest, res) => {
+authRouter.get('/signout', authMiddleware, async (req: AuthRequest, res) => {
     try {
         await signout(req, res);
     } catch (error) {
@@ -162,7 +162,17 @@ authRouter.post('/signout', authMiddleware, async (req: AuthRequest, res) => {
 
 authRouter.get('/me', authMiddleware, async (req: AuthRequest, res) => {
     try {
-        res.json({ user: req.user?.user_metadata });
+        const { data, error } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", req.user?.sub)
+            .single();
+
+        if (error) {
+            throw error
+        }
+
+        res.json({ user: data });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get user' });
     }

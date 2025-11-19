@@ -54,6 +54,8 @@ router.get("/status/:id", async (req, res) => {
 
         const data = await redis.hgetall(`job:${id}`);
 
+        console.log(`Fetched Data from Redis: `,data);
+
         if (data.status == "waiting_for_input") {
             const { data } = await supabase.from("worker_questions").select("*").eq("uuid", id).single();
             if (!data || !data.questions) {
@@ -80,28 +82,28 @@ router.get("/status/:id", async (req, res) => {
             });
             return;
         }
-        else if (data.status == "mail_generated") {
-            const { data, error } = await supabase.from("generated_mail").select("*").eq("uuid", id).single();
-            if (error) {
-                console.log(error);
-                res.status(500).json({
-                    message: "The generated email was not found. Try Again!"
-                })
-                return
-            }
+        // else if (data.status == "mail_generated") {
+        //     const { data, error } = await supabase.from("generated_mail").select("*").eq("uuid", id).single();
+        //     if (error) {
+        //         console.log(error);
+        //         res.status(500).json({
+        //             message: "The generated email was not found. Try Again!"
+        //         })
+        //         return
+        //     }
 
-            res.json({
-                uuid: data.uuid,
-                status: "processed",
-                response: {
-                    type: "mail",
-                    html: data.html,
-                    subject: data.subject,
-                    llmMessage: data.llm_message
-                }
-            })
-            return
-        }
+        //     res.json({
+        //         uuid: data.uuid,
+        //         status: "processed",
+        //         response: {
+        //             type: "mail",
+        //             html: data.html,
+        //             subject: data.subject,
+        //             llmMessage: data.llm_message
+        //         }
+        //     })
+        //     return
+        // }
         else if (data.status) {
             res.json({
                 uuid: id,
