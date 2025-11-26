@@ -54,7 +54,7 @@ router.get("/status/:id", async (req, res) => {
 
         const data = await redis.hgetall(`job:${id}`);
 
-        console.log(`Fetched Data from Redis: `,data);
+        console.log(`Fetched Data from Redis: `, data);
 
         if (data.status == "waiting_for_input") {
             const { data } = await supabase.from("worker_questions").select("*").eq("uuid", id).single();
@@ -181,6 +181,50 @@ router.post("/input/:id", async (req, res) => {
             uuid: id,
             status: "inqueue"
         })
+    }
+    catch (err) {
+        console.log(err);
+        res.status(500).json({ message: "Something went wrong!" });
+        return
+    }
+})
+
+router.post("/mail/:uuid/chat", async (req, res) => {
+    try {
+        const { uuid } = req.params;
+        const { message } = req.body;
+
+        if (!uuid || !message) {
+            return res.status(400).json({
+                message: "Invalid Inputs"
+            });
+        }
+
+        // adding message in db
+        const { error } = await supabase.from("chat_messages").insert({
+            mail_id: uuid,
+            message,
+            role: "user"
+        })
+
+        if (error) {
+            return res.status(500).json({
+                message: "Failed to send message",
+                errorCode: "DB02"
+            })
+        }
+
+        //create a redis object and add to queue
+        await redis.hset(`chat:${uuid}`, {
+            status: "inqueue"
+        })
+
+        await redis.lpush("work_queue", `chat:${uuid}`);
+
+        return res.json({
+            status: "inqueue"
+        })
+
     }
     catch (err) {
         console.log(err);

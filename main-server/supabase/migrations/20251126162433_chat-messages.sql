@@ -59,6 +59,15 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA "extensions";
 
 
 
+CREATE TYPE "public"."chat_message_role" AS ENUM (
+    'ai',
+    'user'
+);
+
+
+ALTER TYPE "public"."chat_message_role" OWNER TO "postgres";
+
+
 CREATE TYPE "public"."worker_status" AS ENUM (
     'inqueue',
     'processing',
@@ -68,9 +77,57 @@ CREATE TYPE "public"."worker_status" AS ENUM (
 
 ALTER TYPE "public"."worker_status" OWNER TO "postgres";
 
+
+CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+BEGIN 
+    INSERT INTO public.profiles (id, full_name, avatar_url)
+    VALUES (
+        new.id,
+        new.raw_user_meta_data->>'full_name',
+        new.raw_user_meta_data->>'avatar_url'
+    );
+    RETURN new;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."handle_new_user"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."update_chat_message_updated_at"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."update_chat_message_updated_at"() OWNER TO "postgres";
+
 SET default_tablespace = '';
 
 SET default_table_access_method = "heap";
+
+
+CREATE TABLE IF NOT EXISTS "public"."chat_messages" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "mail_id" "uuid" NOT NULL,
+    "message" "text",
+    "llm_context" "text",
+    "role" "public"."chat_message_role" NOT NULL,
+    "sent_at" timestamp without time zone DEFAULT "now"(),
+    "updated_at" timestamp without time zone DEFAULT "now"()
+);
+
+
+ALTER TABLE "public"."chat_messages" OWNER TO "postgres";
+
+ALTER TABLE ONLY "public"."chat_messages"
+    ADD CONSTRAINT "fk_chat_mail_id" FOREIGN KEY ("mail_id") REFERENCES "public"."generated_mail"("uuid") ON DELETE CASCADE;
 
 
 CREATE TABLE IF NOT EXISTS "public"."generated_mail" (
@@ -84,6 +141,20 @@ CREATE TABLE IF NOT EXISTS "public"."generated_mail" (
 
 
 ALTER TABLE "public"."generated_mail" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."profiles" (
+    "id" "uuid" NOT NULL,
+    "username" "text",
+    "full_name" "text",
+    "avatar_url" "text",
+    "bio" "text",
+    "updated_at" timestamp with time zone,
+    CONSTRAINT "username_length" CHECK (("char_length"("username") >= 3))
+);
+
+
+ALTER TABLE "public"."profiles" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."worker_process" (
@@ -132,8 +203,23 @@ ALTER TABLE ONLY "public"."worker_questions" ALTER COLUMN "id" SET DEFAULT "next
 
 
 
+ALTER TABLE ONLY "public"."chat_messages"
+    ADD CONSTRAINT "chat_messages_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."generated_mail"
     ADD CONSTRAINT "generated_mail_pkey" PRIMARY KEY ("uuid");
+
+
+
+ALTER TABLE ONLY "public"."profiles"
+    ADD CONSTRAINT "profiles_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."profiles"
+    ADD CONSTRAINT "profiles_username_key" UNIQUE ("username");
 
 
 
@@ -147,8 +233,26 @@ ALTER TABLE ONLY "public"."worker_questions"
 
 
 
+CREATE OR REPLACE TRIGGER "chat_messages_updated_at_trigger" BEFORE UPDATE ON "public"."chat_messages" FOR EACH ROW EXECUTE FUNCTION "public"."update_chat_message_updated_at"();
+
+
+
 ALTER TABLE ONLY "public"."worker_questions"
     ADD CONSTRAINT "fk_worker_process" FOREIGN KEY ("uuid") REFERENCES "public"."worker_process"("uuid") ON DELETE CASCADE;
+
+
+
+
+ALTER TABLE ONLY "public"."profiles"
+    ADD CONSTRAINT "profiles_id_fkey" FOREIGN KEY ("id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+
+
+
+CREATE POLICY "Profiles viewable by everyone" ON "public"."profiles" FOR SELECT USING (true);
+
+
+
+CREATE POLICY "Users can update own profile" ON "public"."profiles" FOR UPDATE USING (("auth"."uid"() = "id"));
 
 
 
@@ -162,6 +266,9 @@ CREATE POLICY "allow_update_and_select_worker_process" ON "public"."worker_proce
 
 CREATE POLICY "allow_update_and_select_worker_questions" ON "public"."worker_questions" USING (true) WITH CHECK (true);
 
+
+
+ALTER TABLE "public"."profiles" ENABLE ROW LEVEL SECURITY;
 
 
 
@@ -335,6 +442,15 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 
 
+GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "anon";
+GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."update_chat_message_updated_at"() TO "anon";
+GRANT ALL ON FUNCTION "public"."update_chat_message_updated_at"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."update_chat_message_updated_at"() TO "service_role";
 
 
 
@@ -347,12 +463,27 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 
 
+
+
+
+
+
+
+GRANT ALL ON TABLE "public"."chat_messages" TO "anon";
+GRANT ALL ON TABLE "public"."chat_messages" TO "authenticated";
+GRANT ALL ON TABLE "public"."chat_messages" TO "service_role";
 
 
 
 GRANT ALL ON TABLE "public"."generated_mail" TO "anon";
 GRANT ALL ON TABLE "public"."generated_mail" TO "authenticated";
 GRANT ALL ON TABLE "public"."generated_mail" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."profiles" TO "anon";
+GRANT ALL ON TABLE "public"."profiles" TO "authenticated";
+GRANT ALL ON TABLE "public"."profiles" TO "service_role";
 
 
 
@@ -439,4 +570,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 --
 -- Dumped schema changes for auth and storage
 --
+
+CREATE OR REPLACE TRIGGER "on_auth_user_created" AFTER INSERT ON "auth"."users" FOR EACH ROW EXECUTE FUNCTION "public"."handle_new_user"();
+
+
 
