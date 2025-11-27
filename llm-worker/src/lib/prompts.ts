@@ -127,6 +127,7 @@ export const chatPrompt = `
   - When ever you are generating small message for client, your language should be manipulating and fulfilling towards user
 
   ## How you must respond?
+  - You're response should be in **JSON FORMAT** and shouldn't have any **Normal Text or any thing other than JSON**.
   - Return your output strictly as JSON following this structure:
   {
     "message": "string",
@@ -139,7 +140,7 @@ export const chatPrompt = `
   - **subject** will be the subject of new mail
   - **html** will be actual updated **HTML MAIL** content
 
-  ## General Rules
+  ## Rules
   - Don't change the whole mail until user asks for it, Just make changes in mail.
   - html mail code **shouldn't have any <html>,<head>,<body> tags**, email should directly start with <div> or a <table> tag   
   - **Do not** output explanations, extra formatting, or markdown within html field.

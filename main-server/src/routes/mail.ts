@@ -189,23 +189,23 @@ router.post("/input/:id", async (req, res) => {
     }
 })
 
-router.post("/mail/:uuid/chat", async (req, res) => {
+router.post("/mail/:mail_id/chat", async (req, res) => {
     try {
-        const { uuid } = req.params;
+        const { mail_id } = req.params;
         const { message } = req.body;
 
-        if (!uuid || !message) {
+        if (!mail_id || !message) {
             return res.status(400).json({
                 message: "Invalid Inputs"
             });
         }
 
         // adding message in db
-        const { error } = await supabase.from("chat_messages").insert({
-            mail_id: uuid,
+        const { data, error } = await supabase.from("chat_messages").insert({
+            mail_id,
             message,
             role: "user"
-        })
+        }).select("id").single();
 
         if (error) {
             return res.status(500).json({
@@ -213,18 +213,69 @@ router.post("/mail/:uuid/chat", async (req, res) => {
                 errorCode: "DB02"
             })
         }
-
         //create a redis object and add to queue
-        await redis.hset(`chat:${uuid}`, {
+        await redis.hset(`chat:${data.id}`, {
             status: "inqueue"
         })
 
-        await redis.lpush("work_queue", `chat:${uuid}`);
+        await redis.lpush("work_queue", `chat:${data.id}`);
 
         return res.json({
+            chat_id: data.id,
             status: "inqueue"
         })
 
+    }
+    catch (err) {
+        console.log(err);
+        res.status(500).json({ message: "Something went wrong!" });
+        return
+    }
+})
+
+router.get("/chat/:chat_id", async (req, res) => {
+    try {
+        const { chat_id } = req.params;
+        const cachedData = await redis.hgetall(`chat:${chat_id}`);
+        console.log("Cached Data :" + JSON.stringify(cachedData));
+
+        if (cachedData) {
+            return res.json(cachedData);
+        }
+        else {
+            return res.status(400).json({
+                message: "Chat not found!",
+            })
+        }
+    }
+    catch (err) {
+        console.log(err);
+        res.status(500).json({ message: "Something went wrong!" });
+        return
+    }
+});
+
+router.get("/chats/:mail_id", async (req, res) => {
+    try {
+        const { mail_id } = req.params;
+        const { data, error } = await supabase.from("chat_messages").select("*").eq("mail_id", mail_id).order("sent_at", { ascending: true });
+
+        if (error) {
+            return res.status(404).json({
+                message: "Mail Not Found",
+                errorCode: "DB04"
+            });
+        }
+        const response = data.map((chat) => ({
+            id: chat.id,
+            message: chat.message,
+            role: chat.role == "ai" ? "assistant" : chat.role,
+        }))
+
+        return res.json({
+            mail_id,
+            chats: response
+        })
     }
     catch (err) {
         console.log(err);

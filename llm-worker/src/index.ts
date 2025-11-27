@@ -105,15 +105,25 @@ const processsJob = async (jobId: string) => {
             })
         }
         else if (response.type == "mail") {
-            const { error } = await supabase.from("generated_mail").insert({
+            const { data, error } = await supabase.from("generated_mail").insert({
                 uuid,
                 subject: response.subject,
                 html: response.html,
                 llm_message: response.llmMessage
-            })
+            }).select("uuid").single();
 
             if (error) {
                 throw error;
+            }
+            const { error: addChatError } = await supabase.from("chat_messages").insert({
+                mail_id: data.uuid,
+                role: "ai",
+                message: response.llmMessage,
+                llm_context: "The initail generation of mail"
+            });
+
+            if (addChatError) {
+                console.log(addChatError);
             }
 
             const { error: statusError } = await supabase
@@ -146,54 +156,87 @@ const processsJob = async (jobId: string) => {
 }
 
 const processChat = async (chatId: string) => {
+
     console.log(`🔧 Started Processing ${chatId}`);
+    await redis.hset(chatId, {
+        status: "processing"
+    });
 
     // Get chat from db along with the latest generated mail 
     const uuid = chatId.replace("chat:", "");
 
-    const { data, error } = await supabase.from("generated_mail").select("*").eq("uuid", uuid).single();
+    const { data, error } = await supabase.from("chat_messages").select("message, generated_mail(uuid, html)").eq("id", uuid).single();
+
     if (error) {
-        console.log("Oops! No Mail Found!");
+        console.log("⚠️ Oops! No Mail Found!");
         return
     }
 
+    const mailData = Array.isArray(data.generated_mail) ? data.generated_mail[0] : data.generated_mail
 
-    const history: Content[] = [
-        {
-            role: "user",
-            parts: [
-                {
-                    text: "Change mail to dark color theme"
-                }
-            ]
-        }, {
-            role: "model",
-            parts: [
-                {
-                    text: "Changed foreground to red from black and Background to black from white"
-                }
-            ]
-        }, {
-            role: "user",
-            parts: [
-                {
-                    text: `Latest Mail ${data.html}`
-                }
-            ]
+    if (!mailData) {
+        console.log("⚠️ Didn't find mail data")
+        return
+    }
+
+    // Get all chats
+    const { data: previousChats, error: chatFetchError } = await supabase.from("chat_messages").select("*").eq('mail_id', mailData?.uuid).not("id", "eq", uuid).order("sent_at", { ascending: true });
+
+    if (chatFetchError) {
+        console.log("⚠️ Error while fetching mail chats!", chatFetchError);
+        return
+    }
+
+    // create a history from previous chats
+    const generated_history = previousChats.map((chat) => {
+        if (chat.role == "ai") {
+            return {
+                role: "model",
+                parts: [
+                    {
+                        text: chat.llm_context
+                    }
+                ]
+            }
         }
-    ]
+        else {
+            return {
+                role: "user",
+                parts: [
+                    {
+                        text: chat.message
+                    }
+                ]
+            }
+        }
+    })
+
+    // add latest version of mail
+    generated_history.push({
+        role: "user",
+        parts: [
+            {
+                text: `Latest Mail ${mailData?.html}`
+            }
+        ]
+    })
+
+    console.log({ generated_history });
     console.log("🛫 Sending LLM Request");
     const chat = ai.chats.create({
         model: GEMINI_MODEL,
         config: {
             systemInstruction: chatPrompt
         },
-        history
+        history: generated_history
     })
+
     const response = await chat.sendMessage({
-        message: "Change the poster image url from https://lgimodz.vercel.app/{{patch_id}}.webp to https://lgimodz.vercel.app/poster/{{patch_id}}.webp"
+        message: data.message
     })
+
     console.log("🛬 Recieved LLM Response");
+
     try {
         console.log(response.text);
         const llmResponse = JSON.parse(response.text!);
@@ -201,25 +244,39 @@ const processChat = async (chatId: string) => {
         // update the latest mail 
         // add new chat and llm context 
         // update status on redis and client
-    
+
         const { error } = await supabase.from("generated_mail").update({
             subject: llmResponse.subject,
             html: llmResponse.html,
             updated_at: new Date().toISOString()
-        }).eq("uuid", uuid);
+        }).eq("uuid", mailData.uuid);
 
         if (error) {
             console.log("⚠️ Error");
             console.log(error);
         }
 
+        const { error: LLMChatAddError } = await supabase.from("chat_messages").insert({
+            role: "ai",
+            message: llmResponse.message,
+            llm_context: llmResponse.llm_context,
+            mail_id: mailData.uuid
+        })
+
+        if (LLMChatAddError) {
+            console.log("⚠️ Error");
+            console.log(error);
+        }
+
+        await redis.hset(chatId, {
+            status: "processed"
+        });
     }
-    catch (error) { 
+    catch (error) {
         console.log("⚠️ Error");
         console.log(error);
-    }
-    
 
+    }
 
     console.log("🏁 Done with " + chatId);
 }
