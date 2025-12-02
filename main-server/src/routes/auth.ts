@@ -3,8 +3,19 @@ import { supabase } from "../lib/supabase";
 import { FRONTEND_URL, NODE_ENV } from "../lib/env";
 import { redisAuth } from "../lib/redis";
 import { authMiddleware, signout, type AuthRequest } from "../middleware/auth";
+import rateLimit from "express-rate-limit";
 
 const authRouter = Router();
+
+const limiter = rateLimit({
+	windowMs: 15 * 60 * 1000, // 15 minutes
+	limit: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes).
+	standardHeaders: 'draft-8', // draft-6: `RateLimit-*` headers; draft-7 & draft-8: combined `RateLimit` header
+	legacyHeaders: false, // Disable the `X-RateLimit-*` headers.
+	ipv6Subnet: 56, // Set to 60 or 64 to be less aggressive, or 52 or 48 to be more aggressive
+})
+
+authRouter.use(limiter);
 
 authRouter.post("/signup", async (req, res) => {
     try {
@@ -66,9 +77,9 @@ authRouter.post("/signin", async (req, res) => {
         if (data.session) {
             res.cookie("access_token", data.session.access_token, {
                 sameSite: "lax",
-                httpOnly: NODE_ENV == "production",
-                secure: NODE_ENV == "production",
-                maxAge: (data.session.expires_in || 600) * 1000,
+                httpOnly: true,
+                secure: true,
+                maxAge: (data.session.expires_in || 60 * 60 * 24 * 7) * 1000,
             })
             // Storing refresh token in seperate redis cache 
             // Storing ref_token in client cookies just doesn't make sense

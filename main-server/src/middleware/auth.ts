@@ -53,7 +53,7 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
             return
         }
 
-        console.log(`User claims`, data.claims);
+        // console.log(`User claims`, data.claims);
         req.user = data.claims;
         next();
 

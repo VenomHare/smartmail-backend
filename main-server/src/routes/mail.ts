@@ -1,10 +1,54 @@
 import { supabase } from '../lib/supabase';
 import { redis } from '../lib/redis';
 import { Router } from 'express';
+import { authMiddleware, type AuthRequest } from '../middleware/auth';
+import { get_user_todays_chat_message_count } from '../helper/rate-limit';
+import rateLimit from 'express-rate-limit';
+import { NODE_ENV } from '../lib/env';
 
+const CHAT_RATE_LIMITING = NODE_ENV == "production"
+
+const limiter = rateLimit({
+    windowMs: 5 * 60 * 1000, 
+    limit: 100, 
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    ipv6Subnet: 56, 
+
+})
+
+const pollingLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, 
+    limit: 200, 
+    standardHeaders: 'draft-8',
+    legacyHeaders: false, 
+    ipv6Subnet: 56, 
+
+})
 const router = Router();
+router.use("/status/:id", pollingLimiter);
+router.use("/chat/:chat_id", pollingLimiter);
+router.use(limiter);
+router.use(authMiddleware);
 
-router.post("/create", async (req, res) => {
+router.get("/history", async (req: AuthRequest, res) => {
+    try {
+        const { data, error } = await supabase.from("generated_mail").select("uuid, subject").eq("user_id", req.user?.sub);
+        if (error) {
+            console.log(error);
+            res.status(500).json({ message: "Something went wrong!", errorCode: "DB04" });
+            return
+        }
+        res.json(data);
+        return
+    }
+    catch (err) {
+        console.log(err);
+        res.status(500).json({ message: "Something went wrong!" });
+    }
+})
+
+router.post("/create", async (req: AuthRequest, res) => {
     try {
         const { answers } = req.body;
         if (!answers || !Array.isArray(answers)) {
@@ -12,17 +56,23 @@ router.post("/create", async (req, res) => {
             return
         }
 
+        if (!req.user?.sub) {
+            return res.status(401).json({ message: "User Not Logged in!" });
+        }
+
         const { data } = await supabase
             .from("worker_process")
             .insert({
                 status: "inqueue",
                 default_answers: answers,
-                extra_inputs: ""
+                extra_inputs: "",
+                user_id: req.user.sub
             })
             .select("*")
             .single();
 
         console.log(data);
+
         if (!data || !data.uuid) {
             res.status(500).json({
                 message: "Failed to insert data in queue"
@@ -189,7 +239,7 @@ router.post("/input/:id", async (req, res) => {
     }
 })
 
-router.post("/mail/:mail_id/chat", async (req, res) => {
+router.post("/mail/:mail_id/chat", async (req: AuthRequest, res) => {
     try {
         const { mail_id } = req.params;
         const { message } = req.body;
@@ -200,9 +250,28 @@ router.post("/mail/:mail_id/chat", async (req, res) => {
             });
         }
 
+        if (CHAT_RATE_LIMITING) {
+            try {
+                const messageCount = await get_user_todays_chat_message_count(req.user!.sub);
+                console.log("👉 Message Count: " + messageCount);
+                if (!messageCount || messageCount > 3) {
+                    return res.status(429).json({
+                        message: "Exceeded Free quota",
+                    })
+                }
+            }
+            catch {
+                return res.status(500).json({
+                    message: "Failed to get messaege",
+                    errorCode: "DB06"
+                })
+            }
+        }
+
         // adding message in db
         const { data, error } = await supabase.from("chat_messages").insert({
             mail_id,
+            user_id: req.user!.sub,
             message,
             role: "user"
         }).select("id").single();
@@ -283,4 +352,5 @@ router.get("/chats/:mail_id", async (req, res) => {
         return
     }
 })
+
 export default router

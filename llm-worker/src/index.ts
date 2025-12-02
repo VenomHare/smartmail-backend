@@ -1,4 +1,3 @@
-import type { Content } from "@google/genai";
 import { initialQuestions } from "./lib/config";
 import { GEMINI_MODEL } from "./lib/env";
 import { ai, redis, supabase } from "./lib/exports";
@@ -107,9 +106,10 @@ const processsJob = async (jobId: string) => {
         else if (response.type == "mail") {
             const { data, error } = await supabase.from("generated_mail").insert({
                 uuid,
+                user_id: answersData.user_id,
                 subject: response.subject,
                 html: response.html,
-                llm_message: response.llmMessage
+                llm_message: response.llmMessage,
             }).select("uuid").single();
 
             if (error) {
@@ -239,7 +239,15 @@ const processChat = async (chatId: string) => {
 
     try {
         console.log(response.text);
-        const llmResponse = JSON.parse(response.text!);
+        let responseText;
+        if (response.text?.includes("```json")) {
+            [, responseText] = response.text.split("```json");
+            responseText = responseText?.replace("```", "").trim();
+        }
+        else {
+            responseText = response.text;
+        }
+        const llmResponse = JSON.parse(responseText!);
         console.log("🎌Started Experiment🎌");
         // update the latest mail 
         // add new chat and llm context 
