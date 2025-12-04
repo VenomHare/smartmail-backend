@@ -6,7 +6,8 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.5"
+    "@types/express": "^5.0.5",
+    "@types/jsonwebtoken": "^9.0.10"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -19,6 +20,7 @@
     "dotenv": "^17.2.3",
     "express-rate-limit": "^8.2.1",
     "googleapis": "^166.0.0",
-    "ioredis": "^5.8.2"
+    "ioredis": "^5.8.2",
+    "jsonwebtoken": "^9.0.2"
   }
 }

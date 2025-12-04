@@ -1,7 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import { supabase, supabaseAdmin } from "../lib/supabase";
 import { redisAuth } from "../lib/redis";
-import { FRONTEND_URL } from "../lib/env";
+import { NODE_ENV } from "../lib/env";
+import jwt from 'jsonwebtoken'
 
 //Refrence Types from supabase
 export type UserClaims = {
@@ -33,7 +34,7 @@ export interface AuthRequest extends Request {
 
 export const authMiddleware = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const access_token = req.cookies.access_token;
+        let access_token = req.cookies.access_token;
 
         if (!access_token) {
             res.status(401).json({
@@ -43,18 +44,33 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
             return
         }
 
-        const { data } = await supabase.auth.getClaims(access_token);
+        const { error } = await supabase.auth.getUser(access_token);
 
-        if (!data || !data.claims) {
+        if (error) {
+            if (error.code == "bad_jwt") {
+                access_token = await refreshTokens(req, res);
+            }
+            else {
+                res.status(401).json({
+                    message: "Unauthorized",
+                    errorCode: "TK_02"
+                });
+                return
+            }
+        }
+
+        const { data: claims } = await supabase.auth.getClaims(access_token);
+
+        if (!claims || !claims.claims) {
             res.status(401).json({
                 message: "Unauthorized",
-                errorCode: "TK_02"
+                errorCode: "TK_03"
             });
             return
         }
 
         // console.log(`User claims`, data.claims);
-        req.user = data.claims;
+        req.user = claims.claims;
         next();
 
     }
@@ -74,6 +90,53 @@ export const signout = async (req: AuthRequest, res: Response) => {
     await redisAuth.del(`session:${req.user.sub}`);
     res.clearCookie("access_token");
     res.json({
-        message: "Logout Succesfull."
+        message: "Logged Out!"
     });
+}
+
+export const refreshTokens = async (req: Request, res: Response) => {
+    try {
+        const access_token = req.cookies.access_token;
+
+        const ClaimsData : any = jwt.decode(access_token);
+        
+        if (ClaimsData == null) {
+            await signout(req, res);
+        }
+
+        const refreshToken = await redisAuth.getex(`session:${ClaimsData?.sub}`);
+
+        if (refreshToken == null) {
+            console.log("Refresh Token not found. Signing user out for new tokens");
+            return await signout(req, res);
+        }
+
+        const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+
+        if (error) {
+            return res.status(401).json({ error: 'Failed to refresh session' });
+        }
+
+        if (data.session && data.user) {
+            res.cookie("access_token", data.session.access_token, {
+                sameSite: "lax",
+                httpOnly: NODE_ENV == "production",
+                secure: NODE_ENV == "production",
+                maxAge: 30 * 24 * 60 * 60 * 1000,
+            })
+
+            // Storing refresh token in client cookies just doesn't make sense
+            redisAuth.setex(`session:${data.user.id}`, 30 * 24 * 60 * 60 * 1000, data.session?.refresh_token);
+
+        }
+        console.log("♻️ Refreshed Session");
+        return data.session?.access_token
+
+    } catch (error) {
+        console.log(error);
+        return res.status(401).json({
+            message: "Unauthorized",
+            errorCode: "REFRESH"
+        })
+    }
 }

@@ -38,14 +38,13 @@ authRouter.post("/signup", async (req, res) => {
                 sameSite: "lax",
                 httpOnly: NODE_ENV == "production",
                 secure: NODE_ENV == "production",
-                maxAge: (data.session.expires_in || 600) * 1000,
+                maxAge: 30 * 24 * 60 * 60 * 1000,
             })
             // Storing refresh token in seperate redis cache 
             // Storing ref_token in client cookies just doesn't make sense
 
-            redisAuth.setex(`session:${data.user?.id}`, 2592000, data.session?.refresh_token);
+            redisAuth.setex(`session:${data.user?.id}`, 30 * 24 * 60 * 60 * 1000, data.session?.refresh_token);
         }
-
 
         res.json({
             message: 'Signup successful. Check your email for verification.',
@@ -79,12 +78,12 @@ authRouter.post("/signin", async (req, res) => {
                 sameSite: "lax",
                 httpOnly: true,
                 secure: true,
-                maxAge: (data.session.expires_in || 60 * 60 * 24 * 7) * 1000,
+                maxAge: 30 * 24 * 60 * 60 * 1000,
             })
             // Storing refresh token in seperate redis cache 
             // Storing ref_token in client cookies just doesn't make sense
 
-            redisAuth.setex(`session:${data.user.id}`, 2592000, data.session?.refresh_token);
+            redisAuth.setex(`session:${data.user.id}`, 30 * 24 * 60 * 60 * 1000, data.session?.refresh_token);
         }
 
         res.json({
@@ -150,7 +149,7 @@ authRouter.post("/callback", async (req, res) => {
             // Storing refresh token in seperate redis cache 
             // Storing ref_token in client cookies just doesn't make sense
 
-            redisAuth.setex(`session:${data.user.id}`, 2592000, data.session?.refresh_token);
+            redisAuth.setex(`session:${data.user.id}`, 30 * 24 * 60 * 60 * 1000, data.session?.refresh_token);
         }
 
 
@@ -215,7 +214,7 @@ authRouter.get('/refresh', authMiddleware, async (req: AuthRequest, res) => {
             })
 
             // Storing refresh token in client cookies just doesn't make sense
-            redisAuth.setex(`session:${data.user.id}`, 2592000, data.session?.refresh_token);
+            redisAuth.setex(`session:${data.user.id}`, 30 * 24 * 60 * 60 * 1000, data.session?.refresh_token);
         }
 
 

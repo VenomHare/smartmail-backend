@@ -42,9 +42,8 @@ app.get("/health", authMiddleware, (_, res) => {
 
 app.use("/auth", authRouter);
 app.use(mailRouter);
-app.use(gmailRouter);
+app.use("/gmail",gmailRouter);
 
-sendEmail("","");
 
 app.listen(PORT, () => {
     console.log("Server Running on PORT " + PORT);
