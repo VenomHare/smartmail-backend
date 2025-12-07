@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS public."gmail_connections" (
     access_token text NOT NULL,
     refresh_token text NOT NULL,
     expiry_date text NOT NULL,
+    linked_at TIMESTAMP WITH ZONE DEFAULT now()
 );
 
 ALTER TABLE public."gmail_connections" 

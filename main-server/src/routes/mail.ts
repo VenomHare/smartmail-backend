@@ -4,7 +4,7 @@ import { Router } from 'express';
 import { authMiddleware, type AuthRequest } from '../middleware/auth';
 import { get_user_todays_chat_message_count } from '../helper/rate-limit';
 import rateLimit from 'express-rate-limit';
-import { NODE_ENV } from '../lib/env';
+import { MAX_MESSAGE, NODE_ENV } from '../lib/env';
 
 const CHAT_RATE_LIMITING = NODE_ENV == "production"
 
@@ -250,15 +250,19 @@ router.post("/mail/:mail_id/chat", async (req: AuthRequest, res) => {
             });
         }
 
+        let remaining_chats = 0;
+
         if (CHAT_RATE_LIMITING) {
             try {
                 const messageCount = await get_user_todays_chat_message_count(req.user!.sub);
                 console.log("👉 Message Count: " + messageCount);
-                if (!messageCount || messageCount > 3) {
+                if (!messageCount || messageCount > MAX_MESSAGE) {
                     return res.status(429).json({
                         message: "Exceeded Free quota",
+                        remaining_chats: 0
                     })
                 }
+                remaining_chats = Math.max(MAX_MESSAGE - messageCount, 0);
             }
             catch {
                 return res.status(500).json({
@@ -291,7 +295,8 @@ router.post("/mail/:mail_id/chat", async (req: AuthRequest, res) => {
 
         return res.json({
             chat_id: data.id,
-            status: "inqueue"
+            status: "inqueue",
+            remaining_chats
         })
 
     }
@@ -309,7 +314,7 @@ router.get("/chat/:chat_id", async (req, res) => {
         console.log("Cached Data :" + JSON.stringify(cachedData));
 
         if (cachedData) {
-            return res.json(cachedData);
+            return  (cachedData);
         }
         else {
             return res.status(400).json({
@@ -332,13 +337,14 @@ router.get("/chats/:mail_id", async (req, res) => {
         if (error) {
             return res.status(404).json({
                 message: "Mail Not Found",
-                errorCode: "DB04"
+                errorCode   : "DB04"
             });
         }
         const response = data.map((chat) => ({
             id: chat.id,
-            message: chat.message,
+            content: chat.message,
             role: chat.role == "ai" ? "assistant" : chat.role,
+            timestamp: chat.sent_at
         }))
 
         return res.json({

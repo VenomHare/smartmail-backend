@@ -81,7 +81,7 @@ router.get("/accounts", async (req: AuthRequest, res) => {
             })
         }
 
-        const { error, data } = await supabase.from("gmail_connections").select("gmail_id").eq("user_id", req.user.sub);
+        const { error, data } = await supabase.from("gmail_connections").select("gmail_id,linked_at").eq("user_id", req.user.sub);
 
         if (error) {
             return res.status(500).json({
@@ -89,7 +89,7 @@ router.get("/accounts", async (req: AuthRequest, res) => {
             })
         }
 
-        res.json(data.map(e => ({ email: e.gmail_id })));
+        res.json(data.map(e => ({ mail: e.gmail_id, linkedAt: e.linked_at })));
     }
     catch (err) {
         console.log(JSON.stringify(err));
